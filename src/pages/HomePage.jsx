@@ -20,10 +20,14 @@ export const HomePage = () => {
         const loadNewReleases = async () => {
             try {
                 setLoading(true);
+                console.log('Starting to load new releases...');
                 const releases = await getNewReleases(12);
-                setNewReleases(releases);
+                console.log('New releases loaded:', releases);
+                console.log('Number of releases:', releases ? releases.length : 0);
+                setNewReleases(releases || []);
             } catch (error) {
                 console.error('Error loading new releases:', error);
+                setNewReleases([]);
             } finally {
                 setLoading(false);
             }
@@ -180,7 +184,7 @@ export const HomePage = () => {
 
                 {loading ? (
                     <SkeletonLoader count={6} type="album" />
-                ) : (
+                ) : newReleases.length > 0 ? (
                     <motion.div
                         variants={containerVariants}
                         initial="hidden"
@@ -191,6 +195,10 @@ export const HomePage = () => {
                             <AlbumCard key={album.id} album={album} index={index} />
                         ))}
                     </motion.div>
+                ) : (
+                    <div className="text-center py-12">
+                        <p className="text-gray-400 text-lg">No albums loaded. Please try again later.</p>
+                    </div>
                 )}
             </section>
 
