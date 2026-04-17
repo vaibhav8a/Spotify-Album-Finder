@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { FiArrowRight } from 'react-icons/fi';
 import { SearchBar, AlbumCard, SkeletonLoader } from '../components';
-import { searchSpotify, getNewReleases } from '../services/spotifyApi';
+import { searchSpotify, getNewReleases, getAlbumsByMood, getRecommendedAlbums } from '../services/spotifyApi';
 import { useRecentlySearchedStore } from '../context/store';
 import { useDebounce } from '../hooks';
 
@@ -11,7 +11,11 @@ export const HomePage = () => {
     const navigate = useNavigate();
     const [searchQuery, setSearchQuery] = useState('');
     const [newReleases, setNewReleases] = useState([]);
+    const [recommendedAlbums, setRecommendedAlbums] = useState([]);
+    const [moodAlbums, setMoodAlbums] = useState({});
+    const [selectedMood, setSelectedMood] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [moodLoading, setMoodLoading] = useState(false);
     const { recentSearches } = useRecentlySearchedStore();
     const { addSearch } = useRecentlySearchedStore();
     const debouncedQuery = useDebounce(searchQuery, 300);
@@ -25,6 +29,10 @@ export const HomePage = () => {
                 console.log('New releases loaded:', releases);
                 console.log('Number of releases:', releases ? releases.length : 0);
                 setNewReleases(releases || []);
+
+                // Also load recommended albums
+                const recommended = await getRecommendedAlbums(8);
+                setRecommendedAlbums(recommended || []);
             } catch (error) {
                 console.error('Error loading new releases:', error);
                 setNewReleases([]);
@@ -46,6 +54,39 @@ export const HomePage = () => {
 
     const handleRecentSearch = (query) => {
         navigate(`/search?q=${encodeURIComponent(query)}`);
+    };
+
+    const handleMoodClick = async (moodName) => {
+        const moodKey = moodName.toLowerCase();
+        console.log('🎵 Mood clicked:', moodName, moodKey);
+
+        // If already selected, toggle off
+        if (selectedMood === moodKey) {
+            console.log('🎵 Toggling off mood');
+            setSelectedMood(null);
+            return;
+        }
+
+        // If not loaded yet, fetch the albums
+        if (!moodAlbums[moodKey]) {
+            try {
+                console.log('🎵 Fetching albums for mood:', moodKey);
+                setMoodLoading(true);
+                const albums = await getAlbumsByMood(moodKey, 12);
+                console.log('🎵 Received albums:', albums);
+                setMoodAlbums(prev => ({
+                    ...prev,
+                    [moodKey]: albums
+                }));
+            } catch (error) {
+                console.error(`Error loading ${moodName} albums:`, error);
+            } finally {
+                setMoodLoading(false);
+            }
+        }
+
+        console.log('🎵 Setting selected mood to:', moodKey);
+        setSelectedMood(moodKey);
     };
 
     const containerVariants = {
@@ -209,29 +250,94 @@ export const HomePage = () => {
                     variants={containerVariants}
                     initial="hidden"
                     animate="visible"
-                    className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+                    className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8"
                 >
                     {[
                         { name: 'Chill', color: 'from-blue-500 to-cyan-400' },
                         { name: 'Workout', color: 'from-red-500 to-orange-400' },
                         { name: 'Party', color: 'from-purple-500 to-pink-400' },
-                        { name: 'Focus', color: 'from-indigo-500 to-blue-400' },
-                        { name: 'Sleep', color: 'from-slate-500 to-indigo-400' },
-                        { name: 'Happy', color: 'from-yellow-400 to-orange-300' },
-                    ].map((mood, index) => (
-                        <motion.div
+                    ].map((mood) => (
+                        <motion.button
                             key={mood.name}
                             variants={itemVariants}
                             whileHover={{ scale: 1.05, y: -8 }}
                             whileTap={{ scale: 0.95 }}
-                            className={`p-6 rounded-lg bg-gradient-to-br ${mood.color} cursor-pointer hover:shadow-lg hover:shadow-current/30 transition-all`}
+                            onClick={() => handleMoodClick(mood.name)}
+                            className={`p-6 rounded-lg bg-gradient-to-br ${mood.color} cursor-pointer hover:shadow-lg hover:shadow-current/30 transition-all border-2 ${selectedMood === mood.name.toLowerCase() ? 'border-white' : 'border-transparent'
+                                }`}
                         >
                             <h3 className="text-xl font-bold text-white">{mood.name}</h3>
-                            <p className="text-sm text-white/80 mt-1">Explore albums</p>
-                        </motion.div>
+                            <p className="text-sm text-white/80 mt-1">
+                                {selectedMood === mood.name.toLowerCase() ? 'Hide albums' : 'Explore albums'}
+                            </p>
+                        </motion.button>
                     ))}
                 </motion.div>
+
+                {/* Mood Albums Display */}
+                {selectedMood && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="mt-8"
+                    >
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-2xl font-bold text-white capitalize">
+                                {selectedMood} Albums
+                            </h3>
+                            <button
+                                onClick={() => setSelectedMood(null)}
+                                className="text-gray-400 hover:text-white transition-colors"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {moodLoading ? (
+                            <SkeletonLoader count={6} type="album" />
+                        ) : moodAlbums[selectedMood] && moodAlbums[selectedMood].length > 0 ? (
+                            <motion.div
+                                variants={containerVariants}
+                                initial="hidden"
+                                animate="visible"
+                                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+                            >
+                                {moodAlbums[selectedMood].map((album, index) => (
+                                    <AlbumCard key={album.id} album={album} index={index} />
+                                ))}
+                            </motion.div>
+                        ) : (
+                            <div className="text-center py-12">
+                                <p className="text-gray-400 text-lg">No albums found for this mood.</p>
+                            </div>
+                        )}
+                    </motion.div>
+                )}
             </section>
+
+            {/* Recommended Albums */}
+            {recommendedAlbums.length > 0 && !selectedMood && (
+                <section className="max-w-7xl mx-auto px-4 py-12">
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-2xl font-bold text-white">Recommended For You</h2>
+                        <a href="/search" className="text-spotify hover:text-green-400 flex items-center gap-2">
+                            Explore More <FiArrowRight />
+                        </a>
+                    </div>
+
+                    <motion.div
+                        variants={containerVariants}
+                        initial="hidden"
+                        animate="visible"
+                        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+                    >
+                        {recommendedAlbums.map((album, index) => (
+                            <AlbumCard key={album.id} album={album} index={index} />
+                        ))}
+                    </motion.div>
+                </section>
+            )}
         </div>
     );
 };

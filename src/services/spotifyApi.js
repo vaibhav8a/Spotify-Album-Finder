@@ -72,7 +72,7 @@ export const getAccessToken = async () => {
 export const ensureValidToken = async () => {
     if (cachedToken && tokenExpiry && Date.now() < tokenExpiry) {
         console.log('✓ Using cached token, expires in:', Math.round((tokenExpiry - Date.now()) / 1000), 's');
-        return;
+        return cachedToken;
     }
 
     const storedToken = getStoredToken();
@@ -82,11 +82,12 @@ export const ensureValidToken = async () => {
         cachedToken = storedToken;
         tokenExpiry = parseInt(storedExpiry);
         console.log('✓ Restored token from storage');
-        return;
+        return cachedToken;
     }
 
     console.log('⏳ Fetching new token...');
     await getAccessToken();
+    return cachedToken;
 };
 
 const buildQueryString = (params) => {
@@ -133,6 +134,26 @@ export const searchSpotify = async (query, type = 'album', limit = 20) => {
         }
 
         console.log('✅ Search found:', data[type + 's'].items.length, 'results');
+
+        // Filter albums to only show those by the searched artist (if searching by artist name)
+        if (type === 'album') {
+            const queryLower = query.toLowerCase();
+            const filtered = data.albums.items.filter(album => {
+                // Include album if any of its artists match the search query
+                return album.artists.some(artist =>
+                    artist.name.toLowerCase().includes(queryLower)
+                );
+            });
+            console.log('📁 Filtered to:', filtered.length, 'albums by matching artists');
+            return {
+                ...data,
+                albums: {
+                    ...data.albums,
+                    items: filtered
+                }
+            };
+        }
+
         return data;
     } catch (error) {
         console.error('❌ Error:', error.message);
@@ -350,4 +371,56 @@ export const getFeaturedPlaylists = async (limit = 20) => {
         console.error('Error getting playlists:', error);
         throw error;
     }
+};
+
+export const getAlbumsByMood = async (mood, limit = 12) => {
+    const cachedToken = await ensureValidToken();
+
+    // Map moods to Spotify search queries
+    const moodQueries = {
+        chill: 'chill relaxation ambient',
+        workout: 'workout fitness energy pump',
+        party: 'party dance club energy',
+        recommended: 'popular trending best'
+    };
+
+    const query = moodQueries[mood] || moodQueries.recommended;
+
+    try {
+        const params = { q: query, type: 'album' };
+        const url = `${SPOTIFY_API_BASE_URL}/search?${buildQueryString(params)}`;
+
+        console.log(`🎵 Fetching ${mood} albums...`);
+
+        const response = await fetch(url, {
+            method: 'GET',
+            mode: 'cors',
+            headers: {
+                'Authorization': `Bearer ${cachedToken}`,
+                'Accept': 'application/json',
+            }
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(`Failed to get ${mood} albums: ${response.status}`);
+        }
+
+        // Get unique albums and limit results
+        const albums = data.albums?.items || [];
+        const uniqueAlbums = Array.from(
+            new Map(albums.map(album => [album.id, album])).values()
+        ).slice(0, limit);
+
+        console.log(`✅ Found ${uniqueAlbums.length} ${mood} albums`);
+        return uniqueAlbums;
+    } catch (error) {
+        console.error(`Error getting ${mood} albums:`, error);
+        throw error;
+    }
+};
+
+export const getRecommendedAlbums = async (limit = 12) => {
+    return getAlbumsByMood('recommended', limit);
 };
