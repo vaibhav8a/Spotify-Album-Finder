@@ -26,7 +26,7 @@ export const SearchPage = () => {
             try {
                 setLoading(true);
                 setError(null);
-                const results = await searchSpotify(query, 'album', 50);
+                const results = await searchSpotify(query, 'album', 20);
                 setAlbums(results.albums?.items || []);
             } catch (err) {
                 console.error('Search error:', err);

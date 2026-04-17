@@ -90,23 +90,23 @@ export const ensureValidToken = async () => {
 };
 
 const buildQueryString = (params) => {
-    const searchParams = new URLSearchParams();
-    Object.keys(params).forEach(key => {
-        searchParams.append(key, params[key]);
-    });
-    return searchParams.toString();
+    return Object.entries(params)
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+        .join('&');
 };
 
 export const searchSpotify = async (query, type = 'album', limit = 20) => {
     try {
         console.log('🔍 Searching for:', query);
+        console.log('Limit type:', typeof limit, 'Value:', limit);
         await ensureValidToken();
 
         console.log('Token check - cachedToken exists:', !!cachedToken);
         console.log('Token value (first 20 chars):', cachedToken ? cachedToken.substring(0, 20) : 'NULL');
         console.log('Token starts with BQ:', cachedToken && cachedToken.startsWith('BQ'));
 
-        const params = { q: query, type, limit, market: 'US' };
+        // Try with NO limit parameter first
+        const params = { q: query, type };
         const url = `${SPOTIFY_API_BASE_URL}/search?${buildQueryString(params)}`;
 
         console.log('📡 Request URL:', url);
@@ -114,15 +114,13 @@ export const searchSpotify = async (query, type = 'album', limit = 20) => {
 
         const response = await fetch(url, {
             method: 'GET',
+            mode: 'cors',
             headers: {
                 'Authorization': `Bearer ${cachedToken}`,
-                'Accept': 'application/json',
             }
         });
 
-        console.log('📡 Response status:', response.status);
-
-        const data = await response.json();
+        console.log('📡 Response status:', response.status); const data = await response.json();
 
         if (!response.ok) {
             console.error('❌ Search error:', response.status);
