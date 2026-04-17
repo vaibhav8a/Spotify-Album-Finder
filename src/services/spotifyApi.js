@@ -1,13 +1,10 @@
-import axios from 'axios';
-
 const SPOTIFY_API_BASE_URL = 'https://api.spotify.com/v1';
 const TOKEN_API_URL = 'https://accounts.spotify.com/api/token';
 
 let cachedToken = null;
 let tokenExpiry = null;
-let tokenPromise = null; // To handle concurrent token requests
+let tokenPromise = null;
 
-// Helper to get token with fallback to localStorage
 const getStoredToken = () => {
     try {
         return localStorage.getItem('spotifyAccessToken');
@@ -16,72 +13,7 @@ const getStoredToken = () => {
     }
 };
 
-// Create axios instance
-const spotifyApi = axios.create({
-    baseURL: SPOTIFY_API_BASE_URL,
-    headers: {
-        'Accept': 'application/json',
-    },
-});
-
-// Add request interceptor that ensures token is present
-spotifyApi.interceptors.request.use((config) => {
-    // Get the latest token from cache or localStorage
-    let token = cachedToken || getStoredToken();
-
-    if (!token) {
-        console.warn('⚠️ WARNING: No token available for request!');
-    } else {
-        // Check token format
-        if (!token.startsWith('BQ')) {
-            console.warn('⚠️ Token format might be invalid. Token:', token.substring(0, 30));
-        }
-        config.headers['Authorization'] = `Bearer ${token}`;
-        console.log('✓ Token attached to request:', token.substring(0, 20) + '...', 'Length:', token.length);
-    }
-    return config;
-});
-
-// Add response interceptor to handle 401 errors and refresh token
-spotifyApi.interceptors.response.use(
-    (response) => response,
-    async (error) => {
-        const originalRequest = error.config;
-
-        // Log all response errors with full details
-        if (error.response?.status === 400) {
-            console.error('❌ 400 Error Details:');
-            console.error('  URL:', error.config?.url);
-            console.error('  Full URL:', error.config?.baseURL + error.config?.url);
-            console.error('  Method:', error.config?.method);
-            console.error('  Headers:', JSON.stringify(error.config?.headers, null, 2));
-            console.error('  Data:', error.config?.data);
-            console.error('  Response:', error.response?.data);
-        }
-
-        // If we get a 401 (Unauthorized), try to refresh token and retry
-        if (error.response?.status === 401 && !originalRequest._retry) {
-            originalRequest._retry = true;
-            console.log('🔄 Token expired (401), refreshing...');
-
-            try {
-                await getAccessToken();
-                // Retry the original request with new token
-                let newToken = cachedToken;
-                originalRequest.headers['Authorization'] = `Bearer ${newToken}`;
-                return spotifyApi(originalRequest);
-            } catch (refreshError) {
-                console.error('❌ Failed to refresh token:', refreshError.message);
-                return Promise.reject(refreshError);
-            }
-        }
-
-        return Promise.reject(error);
-    }
-);
-
 export const getAccessToken = async () => {
-    // If a token fetch is already in progress, wait for it
     if (tokenPromise) {
         return tokenPromise;
     }
@@ -91,270 +23,333 @@ export const getAccessToken = async () => {
         const clientSecret = process.env.REACT_APP_SPOTIFY_CLIENT_SECRET;
 
         if (!clientId || !clientSecret) {
-            throw new Error('Missing Spotify credentials in environment variables');
+            throw new Error('Missing Spotify credentials');
         }
 
-        console.log('🔐 Fetching new access token from Spotify...');
-        console.log('  Client ID:', clientId ? '✓ Loaded' : '✗ Missing');
-        console.log('  Client Secret:', clientSecret ? '✓ Loaded' : '✗ Missing');
+        console.log('🔐 Fetching new access token...');
 
-        const basicAuth = btoa(`${clientId}:${clientSecret}`);
-
-        tokenPromise = axios.post(
-            TOKEN_API_URL,
-            'grant_type=client_credentials',
-            {
+        tokenPromise = (async () => {
+            const response = await fetch(TOKEN_API_URL, {
+                method: 'POST',
                 headers: {
-                    Authorization: `Basic ${basicAuth}`,
+                    'Authorization': `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
+                body: 'grant_type=client_credentials'
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error_description || 'Failed to get token');
             }
-        );
 
-        const response = await tokenPromise;
+            cachedToken = data.access_token;
+            tokenExpiry = Date.now() + data.expires_in * 1000;
 
-        if (!response.data.access_token) {
-            throw new Error('No access token in response');
-        }
+            console.log('✅ Token obtained, expires in:', data.expires_in, 's');
 
-        cachedToken = response.data.access_token;
-        tokenExpiry = Date.now() + response.data.expires_in * 1000;
+            try {
+                localStorage.setItem('spotifyAccessToken', cachedToken);
+                localStorage.setItem('spotifyTokenExpiry', tokenExpiry.toString());
+            } catch (e) {
+                console.warn('Could not store token', e);
+            }
 
-        console.log('✅ Access token obtained successfully');
-        console.log('  Token (first 30 chars):', cachedToken.substring(0, 30) + '...');
-        console.log('  Expires in:', response.data.expires_in, 'seconds');
+            return cachedToken;
+        })();
 
-        // Store to localStorage
-        try {
-            localStorage.setItem('spotifyAccessToken', cachedToken);
-            localStorage.setItem('spotifyTokenExpiry', tokenExpiry.toString());
-        } catch (e) {
-            console.warn('Could not store token in localStorage', e);
-        }
-
+        const token = await tokenPromise;
         tokenPromise = null;
-        return cachedToken;
+        return token;
     } catch (error) {
-        console.error('❌ Error getting access token:', error.response?.data || error.message);
+        console.error('❌ Token error:', error.message);
         tokenPromise = null;
         throw error;
     }
 };
 
 export const ensureValidToken = async () => {
-    // Check if we have a valid cached token
     if (cachedToken && tokenExpiry && Date.now() < tokenExpiry) {
         console.log('✓ Using cached token, expires in:', Math.round((tokenExpiry - Date.now()) / 1000), 's');
         return;
     }
 
-    // Check localStorage as fallback
     const storedToken = getStoredToken();
     const storedExpiry = localStorage.getItem('spotifyTokenExpiry');
 
     if (storedToken && storedExpiry && Date.now() < parseInt(storedExpiry)) {
         cachedToken = storedToken;
         tokenExpiry = parseInt(storedExpiry);
-        console.log('✓ Restored token from localStorage, expires in:', Math.round((tokenExpiry - Date.now()) / 1000), 's');
+        console.log('✓ Restored token from storage');
         return;
     }
 
-    // Need a new token
-    console.log('⏳ Token invalid or missing, fetching new one...');
+    console.log('⏳ Fetching new token...');
     await getAccessToken();
 };
 
-// Search for albums, artists, or tracks
+const buildQueryString = (params) => {
+    const searchParams = new URLSearchParams();
+    Object.keys(params).forEach(key => {
+        searchParams.append(key, params[key]);
+    });
+    return searchParams.toString();
+};
+
 export const searchSpotify = async (query, type = 'album', limit = 20) => {
     try {
         console.log('🔍 Searching for:', query);
         await ensureValidToken();
-        console.log('📡 Making API request to /search');
-        const response = await spotifyApi.get('/search', {
-            params: {
-                q: query,
-                type,
-                limit,
-                market: 'US',
-            },
+
+        console.log('Token check - cachedToken exists:', !!cachedToken);
+        console.log('Token value (first 20 chars):', cachedToken ? cachedToken.substring(0, 20) : 'NULL');
+        console.log('Token starts with BQ:', cachedToken && cachedToken.startsWith('BQ'));
+
+        const params = { q: query, type, limit, market: 'US' };
+        const url = `${SPOTIFY_API_BASE_URL}/search?${buildQueryString(params)}`;
+
+        console.log('📡 Request URL:', url);
+        console.log('📡 Authorization header will be: Bearer ' + (cachedToken ? cachedToken.substring(0, 20) + '...' : 'NULL'));
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${cachedToken}`,
+                'Accept': 'application/json',
+            }
         });
-        console.log('✅ Search successful, found:', response.data[type + 's'].items.length, type + 's');
-        return response.data;
+
+        console.log('📡 Response status:', response.status);
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            console.error('❌ Search error:', response.status);
+            console.error('Error response:', data);
+            if (data.error) {
+                console.error('Error message:', data.error.message);
+                console.error('Error status:', data.error.status);
+            }
+            throw new Error(`Search failed: ${response.status}`);
+        }
+
+        console.log('✅ Search found:', data[type + 's'].items.length, 'results');
+        return data;
     } catch (error) {
-        console.error('❌ Error searching Spotify:', error.response?.status, error.response?.data || error.message);
-        console.error('Headers were:', error.config?.headers);
+        console.error('❌ Error:', error.message);
         throw error;
     }
 };
 
-// Get album details
 export const getAlbumDetails = async (albumId) => {
     try {
         await ensureValidToken();
-        const response = await spotifyApi.get(`/albums/${albumId}`);
-        return response.data;
+        const url = `${SPOTIFY_API_BASE_URL}/albums/${albumId}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${cachedToken}`,
+                'Accept': 'application/json',
+            }
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(`Failed: ${response.status}`);
+        }
+
+        return data;
     } catch (error) {
-        console.error('Error getting album details:', error);
+        console.error('Error getting album:', error);
         throw error;
     }
 };
 
-// Get album tracks
 export const getAlbumTracks = async (albumId) => {
     try {
         await ensureValidToken();
-        const response = await spotifyApi.get(`/albums/${albumId}/tracks`, {
-            params: {
-                limit: 50,
-            },
+        const params = { limit: 50 };
+        const url = `${SPOTIFY_API_BASE_URL}/albums/${albumId}/tracks?${buildQueryString(params)}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${cachedToken}`,
+                'Accept': 'application/json',
+            }
         });
-        return response.data.items;
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(`Failed: ${response.status}`);
+        }
+
+        return data.items;
     } catch (error) {
-        console.error('Error getting album tracks:', error);
+        console.error('Error getting tracks:', error);
         throw error;
     }
 };
 
-// Get artist details
 export const getArtistDetails = async (artistId) => {
     try {
         await ensureValidToken();
-        const response = await spotifyApi.get(`/artists/${artistId}`);
-        return response.data;
+        const url = `${SPOTIFY_API_BASE_URL}/artists/${artistId}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${cachedToken}`,
+                'Accept': 'application/json',
+            }
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(`Failed: ${response.status}`);
+        }
+
+        return data;
     } catch (error) {
-        console.error('Error getting artist details:', error);
+        console.error('Error getting artist:', error);
         throw error;
     }
 };
 
-// Get artist's top albums
 export const getArtistAlbums = async (artistId, limit = 10) => {
     try {
         await ensureValidToken();
-        const response = await spotifyApi.get(`/artists/${artistId}/albums`, {
-            params: {
-                limit,
-                include_groups: 'album,single',
-                market: 'US',
-            },
+        const params = { limit, include_groups: 'album,single', market: 'US' };
+        const url = `${SPOTIFY_API_BASE_URL}/artists/${artistId}/albums?${buildQueryString(params)}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${cachedToken}`,
+                'Accept': 'application/json',
+            }
         });
-        return response.data.items;
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(`Failed: ${response.status}`);
+        }
+
+        return data.items;
     } catch (error) {
-        console.error('Error getting artist albums:', error);
+        console.error('Error getting albums:', error);
         throw error;
     }
 };
 
-// Get new releases - using artist search as fallback
 export const getNewReleases = async (limit = 20) => {
     try {
-        console.log('ensureValidToken called...');
+        console.log('📚 Getting new releases...');
         await ensureValidToken();
-        console.log('Token available:', cachedToken ? 'Yes' : 'No');
 
-        // Try browse endpoint first
         try {
             console.log('Trying browse endpoint...');
-            const response = await spotifyApi.get('/browse/new-releases', {
-                params: {
-                    limit,
-                    country: 'US',
-                },
+            const params = { limit, country: 'US' };
+            const url = `${SPOTIFY_API_BASE_URL}/browse/new-releases?${buildQueryString(params)}`;
+
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${cachedToken}`,
+                    'Accept': 'application/json',
+                }
             });
-            console.log('Browse endpoint success, found albums:', response.data.albums.items.length);
-            return response.data.albums.items;
+
+            const data = await response.json();
+
+            if (response.ok) {
+                console.log('✅ Browse success, found:', data.albums.items.length, 'albums');
+                return data.albums.items;
+            }
+
+            throw new Error(`Browse failed: ${response.status}`);
         } catch (browseError) {
-            // Fallback to search for popular albums using common terms
-            console.log('Browse endpoint failed with error:', browseError.message);
-            console.log('Falling back to search...');
-            const searchTerms = ['2024', 'album', 'latest'];
-            const randomTerm = searchTerms[Math.floor(Math.random() * searchTerms.length)];
-            console.log('Searching for:', randomTerm);
-            const response = await spotifyApi.get('/search', {
-                params: {
-                    q: randomTerm,
-                    type: 'album',
-                    limit,
-                    market: 'US',
-                },
+            console.log('Browse failed, using fallback search...');
+            const searchTerms = ['album', '2024', 'new'];
+            const term = searchTerms[Math.floor(Math.random() * searchTerms.length)];
+
+            const params = { q: term, type: 'album', limit, market: 'US' };
+            const url = `${SPOTIFY_API_BASE_URL}/search?${buildQueryString(params)}`;
+
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${cachedToken}`,
+                    'Accept': 'application/json',
+                }
             });
-            console.log('Search successful, found albums:', response.data.albums.items.length);
-            return response.data.albums.items;
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(`Search failed: ${response.status}`);
+            }
+
+            console.log('✅ Search found:', data.albums.items.length, 'albums');
+            return data.albums.items;
         }
     } catch (error) {
-        console.error('Error getting new releases:', error.response?.data || error.message);
-        console.error('Full error:', error);
+        console.error('❌ Error:', error.message);
         throw error;
     }
 };
 
-// Get featured playlists
 export const getFeaturedPlaylists = async (limit = 20) => {
     try {
         await ensureValidToken();
 
-        // Try browse endpoint first
         try {
-            const response = await spotifyApi.get('/browse/featured-playlists', {
-                params: {
-                    limit,
-                    country: 'US',
-                },
+            const params = { limit, country: 'US' };
+            const url = `${SPOTIFY_API_BASE_URL}/browse/featured-playlists?${buildQueryString(params)}`;
+
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${cachedToken}`,
+                    'Accept': 'application/json',
+                }
             });
-            return response.data.playlists.items;
+
+            const data = await response.json();
+
+            if (response.ok) {
+                return data.playlists.items;
+            }
+
+            throw new Error(`Browse failed: ${response.status}`);
         } catch (browseError) {
-            // Fallback to search for popular playlists
-            console.log('Browse featured playlists failed, falling back');
-            const response = await spotifyApi.get('/search', {
-                params: {
-                    q: 'playlist',
-                    type: 'playlist',
-                    limit,
-                    market: 'US',
-                },
+            const params = { q: 'playlist', type: 'playlist', limit, market: 'US' };
+            const url = `${SPOTIFY_API_BASE_URL}/search?${buildQueryString(params)}`;
+
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${cachedToken}`,
+                    'Accept': 'application/json',
+                }
             });
-            return response.data.playlists.items;
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(`Search failed: ${response.status}`);
+            }
+
+            return data.playlists.items;
         }
     } catch (error) {
-        console.error('Error getting featured playlists:', error);
+        console.error('Error getting playlists:', error);
         throw error;
     }
 };
-
-// Get recommendations
-export const getRecommendations = async (seedArtists, seedTracks, limit = 20) => {
-    try {
-        await ensureValidToken();
-        const response = await spotifyApi.get('/recommendations', {
-            params: {
-                seed_artists: seedArtists,
-                seed_tracks: seedTracks,
-                limit,
-                market: 'US',
-            },
-        });
-        return response.data.tracks;
-    } catch (error) {
-        console.error('Error getting recommendations:', error);
-        throw error;
-    }
-};
-
-// Get several albums
-export const getMultipleAlbums = async (albumIds) => {
-    try {
-        await ensureValidToken();
-        const response = await spotifyApi.get('/albums', {
-            params: {
-                ids: albumIds.join(','),
-                market: 'US',
-            },
-        });
-        return response.data.albums;
-    } catch (error) {
-        console.error('Error getting multiple albums:', error);
-        throw error;
-    }
-};
-
-export default spotifyApi;
