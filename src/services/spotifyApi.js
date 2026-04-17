@@ -20,7 +20,7 @@ const getStoredToken = () => {
 const spotifyApi = axios.create({
     baseURL: SPOTIFY_API_BASE_URL,
     headers: {
-        'Content-Type': 'application/json',
+        'Accept': 'application/json',
     },
 });
 
@@ -32,8 +32,12 @@ spotifyApi.interceptors.request.use((config) => {
     if (!token) {
         console.warn('⚠️ WARNING: No token available for request!');
     } else {
+        // Check token format
+        if (!token.startsWith('BQ')) {
+            console.warn('⚠️ Token format might be invalid. Token:', token.substring(0, 30));
+        }
         config.headers['Authorization'] = `Bearer ${token}`;
-        console.log('✓ Token attached to request:', token.substring(0, 20) + '...');
+        console.log('✓ Token attached to request:', token.substring(0, 20) + '...', 'Length:', token.length);
     }
     return config;
 });
@@ -43,6 +47,17 @@ spotifyApi.interceptors.response.use(
     (response) => response,
     async (error) => {
         const originalRequest = error.config;
+
+        // Log all response errors with full details
+        if (error.response?.status === 400) {
+            console.error('❌ 400 Error Details:');
+            console.error('  URL:', error.config?.url);
+            console.error('  Full URL:', error.config?.baseURL + error.config?.url);
+            console.error('  Method:', error.config?.method);
+            console.error('  Headers:', JSON.stringify(error.config?.headers, null, 2));
+            console.error('  Data:', error.config?.data);
+            console.error('  Response:', error.response?.data);
+        }
 
         // If we get a 401 (Unauthorized), try to refresh token and retry
         if (error.response?.status === 401 && !originalRequest._retry) {
@@ -75,14 +90,22 @@ export const getAccessToken = async () => {
         const clientId = process.env.REACT_APP_SPOTIFY_CLIENT_ID;
         const clientSecret = process.env.REACT_APP_SPOTIFY_CLIENT_SECRET;
 
-        console.log('🔐 Fetching new access token...');
+        if (!clientId || !clientSecret) {
+            throw new Error('Missing Spotify credentials in environment variables');
+        }
+
+        console.log('🔐 Fetching new access token from Spotify...');
+        console.log('  Client ID:', clientId ? '✓ Loaded' : '✗ Missing');
+        console.log('  Client Secret:', clientSecret ? '✓ Loaded' : '✗ Missing');
+
+        const basicAuth = btoa(`${clientId}:${clientSecret}`);
 
         tokenPromise = axios.post(
             TOKEN_API_URL,
             'grant_type=client_credentials',
             {
                 headers: {
-                    Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+                    Authorization: `Basic ${basicAuth}`,
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
             }
@@ -90,10 +113,16 @@ export const getAccessToken = async () => {
 
         const response = await tokenPromise;
 
+        if (!response.data.access_token) {
+            throw new Error('No access token in response');
+        }
+
         cachedToken = response.data.access_token;
         tokenExpiry = Date.now() + response.data.expires_in * 1000;
 
-        console.log('✅ Access token obtained successfully, expires in:', response.data.expires_in, 's');
+        console.log('✅ Access token obtained successfully');
+        console.log('  Token (first 30 chars):', cachedToken.substring(0, 30) + '...');
+        console.log('  Expires in:', response.data.expires_in, 'seconds');
 
         // Store to localStorage
         try {

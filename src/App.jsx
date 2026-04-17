@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Navbar, Footer } from './components';
-import { HomePage, SearchPage, AlbumDetailsPage, FavoritesPage, AboutPage } from './pages';
+import { HomePage, SearchPage, AlbumDetailsPage, FavoritesPage, AboutPage, DebugPage } from './pages';
 import { getAccessToken } from './services/spotifyApi';
 
 function App() {
@@ -41,6 +41,7 @@ function App() {
                         <Route path="/album/:albumId" element={<AlbumDetailsPage />} />
                         <Route path="/favorites" element={<FavoritesPage />} />
                         <Route path="/about" element={<AboutPage />} />
+                        <Route path="/debug" element={<DebugPage />} />
                         <Route path="*" element={<NotFoundPage />} />
                     </Routes>
                 </AnimatePresence>
